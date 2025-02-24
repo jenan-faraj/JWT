@@ -1,83 +1,86 @@
-const express = require('express');
-const cors = require('cors');
-const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs');
-const cookieParser = require('cookie-parser');
+//-----------------------
+// imports
+//-----------------------
+const express = require("express");
+const jwt = require("jsonwebtoken"); //لانشاء ال token
+const cookieParser = require("cookie-parser"); // لارسال ال token من خلالها
+const bodyParser = require("body-parser"); //لتحويل الداتا الي رح تيجي من الفرونت من json ل parse
+const cors = require("cors"); // لربط الباك مع الفرونت
 
 const app = express();
-const PORT = 5000;
-const SECRET_KEY = "your_secret_key"; // استخدمي مفتاحًا سريًا أقوى في الإنتاج
+const PORT = 9000;
 
-app.use(express.json());
+//-----------------------
+// middlewares
+//-----------------------
+
+app.use(cors({ origin: "http://localhost:5174", credentials: true })); //credentials لما تكون true بتسمحلنا نرسل ونستقبل ال cookie  //الكود المسؤول عن ربط الفرونت في الباك
+app.use(bodyParser.json()); //لتحويل الداتا الي رح تيجي من الفرونت من json ل parse
 app.use(cookieParser());
-app.use(cors({
-    origin: 'http://localhost:5173',  // اسمحي للـ React frontend بالوصول
-    credentials: true
-}));
 
-// تخزين المستخدمين في الذاكرة (مؤقتًا)
-const users = {};
+const users = []; // لتخزين الداتا تاعت اليوزر
 
-// **تسجيل المستخدم**
-app.post('/signup', async (req, res) => {
-    const { username, password } = req.body;
+const authenticateToken = (req, res, next) => {
+  //للتاكد من وجود token
+  const token = req.cookies.token; // للوصول لل token
+  if (!token) return res.sendStatus(401); // اذا ال token مش موجود رجع ايرور 401
 
-    if (users[username]) {
-        return res.status(400).json({ message: "Username already exists" });
-    }
+  jwt.verify(token, "secretKey", (err, user) => {
+    // اذا موجود ال token اتاكدلي منو
+    if (err) return res.sendStatus(403); // اذا فيه ايرور رجع ايرور 403
+    req.user = user; // اذا مافي خزن اليوزر في req.user
+    next(); // عشان نخليه ينتقل ع meddleware الي بعدها
+  });
+};
 
-    const hashedPassword = await bcrypt.hash(password, 10);
-    users[username] = { password: hashedPassword };
+//-----------------------
+// Sign up
+//-----------------------
 
-    res.status(201).json({ message: "User registered successfully" });
+app.post("/signup", (req, res) => {
+  const { name, email, password } = req.body; // ليجيب الداتا الي رح يعبيها اليوزر
+  const user = { name, email, password }; // خزننا الداتا بمتغير
+  users.push(user); // اعملنا بوش للداتا ع ال array
+  console.log("Users:", users); // منطبع الداتا في terminal
+  res.status(201).send("user Registered"); // رساله انه تم تسجيل الدخول
 });
 
-// **تسجيل الدخول**
-app.post('/signin', async (req, res) => {
-    const { username, password } = req.body;
-    const user = users[username];
+app.post("/signin", (req, res) => {
+  const { email, password } = req.body; // ليجيب الداتا الي رح يعبيها اليوزر
+  const trimmedEmail = email.trim(); // لنشيل الفراغات من الايميل
+  const trimmedPassword = password.trim(); // لنشيل الفراغات من الباسورد
 
-    if (!user) {
-        return res.status(401).json({ message: "Invalid credentials" });
-    }
+  const user = users.find(
+    (u) => u.email === trimmedEmail && u.password === trimmedPassword
+  ); // فلتر للتاكد اذا اليوزر موجود او لا
 
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-        return res.status(401).json({ message: "Invalid credentials" });
-    }
+  if (!user) return res.status(400).send("Invalid credentials"); // اذا مش موجود رجع هاد الايرور
 
-    const token = jwt.sign({ username }, SECRET_KEY, { expiresIn: '1h' });
+  const token = jwt.sign({ email: user.email }, "secretKey", {
+    expiresIn: "1h", // لتحديد كم رح يضل اليوزر بلموقع
+  }); // اذا كان اليوزر موجود رح ينشئ token
 
-    res.cookie('token', token, {
-        httpOnly: true,
-        secure: false, // ضعيه true إذا كنتِ تعملين على HTTPS
-        sameSite: 'strict'
-    });
+  res.cookie("token", token, {
+    // لارسال ال token من خلال cookie
+    httpOnly: true, // منح الفرونت من الوصول لل cookie
+    sameSite: "lax",
+    secure: false,
+  });
 
-    res.json({ message: "Login successful" });
+  res.send(`Logged in successfully`); // رساله انه تم تسجيل الدخول
 });
 
-// **صفحة البروفايل (محمية بالتوكن)**
-app.get('/profile', (req, res) => {
-    const token = req.cookies.token;
-    if (!token) {
-        return res.status(401).json({ message: "Unauthorized" });
-    }
+//-----------------------
+// Sign in
+//-----------------------
 
-    try {
-        const decoded = jwt.verify(token, SECRET_KEY);
-        res.json({ message: `Welcome ${decoded.username}` });
-    } catch (error) {
-        return res.status(401).json({ message: "Invalid token" });
-    }
-});
-
-// **تسجيل الخروج**
-app.post('/logout', (req, res) => {
-    res.clearCookie('token');
-    res.json({ message: "Logged out successfully" });
+app.get("/profile", authenticateToken, (req, res) => {
+  // authenticateToken: للتاكد اذا الايميل موجود في التوكين
+  const user = users.find((u) => u.email === req.user.email); // جلب اليوزر
+  if (!user) return res.status(404).send("user not found"); // ايرور في حالم لم يكن اليوزر موجود
+  res.send(`Welcome ${user.email}`); // رساله ترحيبيه اذا كان اليوزر موجود
 });
 
 app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Server is running on port http://localhost:${PORT}`); // طباعه البورت في التيرمنال
 });
